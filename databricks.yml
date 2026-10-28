@@ -46,7 +46,7 @@ variables:
     default: ""
   node_type_id:
     description: Cluster node type for the migration job (ignored on serverless)
-    default: i3.xlarge
+    default: Standard_DS3_v2   # Azure node type (i3.xlarge is AWS-only)
   spark_version:
     description: Databricks Runtime for the migration job (13.3 LTS minimum)
     default: 15.4.x-scala2.12

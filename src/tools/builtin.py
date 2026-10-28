@@ -121,6 +121,27 @@ class InputDataConverter(ToolConverter):
             return [f'{var} = spark.table("TODO.{_identifier(fwd_path)}")  # Tool {tool.tool_id}: InputData']
 
 
+_INT_RE = re.compile(r"^[+-]?(0|[1-9][0-9]*)$")
+_DEC_RE = re.compile(r"^[+-]?(0|[1-9][0-9]*)?\.[0-9]+$|^[+-]?(0|[1-9][0-9]*)\.?$")
+
+
+def _infer_text_input_type(values) -> str:
+    """
+    Mimic Alteryx Text Input auto-typing: a column whose non-empty values are
+    all integers becomes ``long``, all numeric becomes ``double``, otherwise it
+    stays ``string``. Values with leading zeros (zip codes, IDs) stay strings.
+    Columns containing empty values stay strings to avoid ANSI cast errors.
+    """
+    vals = [("" if v is None else str(v)).strip() for v in values]
+    if not vals or any(v == "" for v in vals):
+        return "string"
+    if all(_INT_RE.match(v) for v in vals):
+        return "long"
+    if all(_INT_RE.match(v) or _DEC_RE.match(v) for v in vals):
+        return "double"
+    return "string"
+
+
 @register("TextInput")
 class TextInputConverter(ToolConverter):
     """Convert TextInput tools to spark.createDataFrame()."""
@@ -143,6 +164,12 @@ class TextInputConverter(ToolConverter):
         lines.append("]")
         col_list = ", ".join(repr(h) for h in headers)
         lines.append(f"{var} = spark.createDataFrame(_data_{tool.tool_id}, [{col_list}])")
+        # Alteryx Text Input auto-detects numeric field types; replicate so that
+        # numeric filters/sorts behave correctly (and don't fail under ANSI mode).
+        for h in headers:
+            spark_type = _infer_text_input_type([row.get(h, "") for row in text_data])
+            if spark_type != "string":
+                lines.append(f'{var} = {var}.withColumn({pystr(h)}, F.col({pystr(h)}).cast("{spark_type}"))')
         return lines
 
 

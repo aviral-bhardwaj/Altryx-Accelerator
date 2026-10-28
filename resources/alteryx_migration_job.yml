@@ -51,7 +51,7 @@ resources:
               output_dir: "{{job.parameters.output_dir}}"
               target_catalog: "{{job.parameters.target_catalog}}"
               target_schema: "{{job.parameters.target_schema}}"
-              output_format: "ipynb,py"
+              output_format: "ipynb"   # ipynb+py collide in a /Workspace output folder
               max_iterations: "3"
               run_sample_validation: "true"
 
