@@ -1,0 +1,20 @@
+{
+  "workflow": "usi_misc_long_format",
+  "status": "WARNING",
+  "unsupported": [],
+  "tools": 85,
+  "issues": [
+    {
+      "severity": "WARNING",
+      "tool_id": null,
+      "tool_type": "",
+      "message": "Map unresolved SOURCE_TABLES entries before execution."
+    },
+    {
+      "severity": "WARNING",
+      "tool_id": null,
+      "tool_type": "Join",
+      "message": "Join with a small inline (TextInput) side could use F.broadcast() for better performance."
+    }
+  ]
+}

@@ -6,10 +6,13 @@ dist/
 build/
 .coverage
 htmlcov/
-output/
+/output/
 *.env
 .env.*
 *.key
 ci_output/
 demo_output/
 .databricks/
+!tests/output/
+.venv*/
+spark-warehouse/

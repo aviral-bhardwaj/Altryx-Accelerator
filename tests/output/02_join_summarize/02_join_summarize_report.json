@@ -1,0 +1,7 @@
+{
+  "workflow": "02_join_summarize",
+  "status": "PASS",
+  "unsupported": [],
+  "tools": 5,
+  "issues": []
+}
