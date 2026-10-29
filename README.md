@@ -1,12 +1,6 @@
 # Altryx Accelerator 1.1.0
 
 
-Microsoft Teams meeting
-Join: https://teams.microsoft.com/meet/2413770699276590?p=XYLQyjjnx9YGTwVB5z
-Meeting ID: 241 377 069 927 659 0
-Passcode: 9K9pD7BZ
-
-
 Convert Alteryx `.yxmd` workflows into Databricks PySpark notebooks. The deterministic converter parses the workflow DAG, translates tools and expressions, checks the generated Python, and exports `.ipynb` and `.py` with a validation report. Optional Spark execution tests schemas and row counts against supplied sources.
 
 **A structural PASS means generated operations passed static checks. It does not certify data parity.** Unsupported tools are reported, partial tools carry review warnings, and external sources must be mapped before running. Validate customer results against an Alteryx baseline before adopting generated pipelines.
