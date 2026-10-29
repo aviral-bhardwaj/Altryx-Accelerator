@@ -5,12 +5,13 @@ name: Bundle Validate & Deploy
 #   - push to main:    deploy to the dev target (and staging when configured)
 #
 # Required repository secrets:
-#   DATABRICKS_HOST   e.g. https://adb-1234567890123456.7.azuredatabricks.net
+#   DATABRICKS_HOST   configured workspace URL
 #   DATABRICKS_TOKEN  PAT or service-principal OAuth token
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -22,8 +23,38 @@ on:
         options: [dev, staging, prod]
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install '.[dev]'
+      - run: python -m build
+        env:
+          SOURCE_DATE_EPOCH: "1793232000"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: altryx-wheel
+          path: dist/*.whl
+      - name: Attach wheel to tagged GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$RELEASE_TAG" || gh release create "$RELEASE_TAG" --generate-notes
+          gh release upload "$RELEASE_TAG" dist/*.whl --clobber
+
   test:
-    name: Unit tests
+    name: Tests (Spark ${{ matrix.spark }})
+    needs: build
+    strategy:
+      matrix:
+        spark: [false, true]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,10 +69,26 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -e '.[dev]'
 
+      - uses: actions/setup-java@v4
+        if: matrix.spark
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: pip install pyspark==3.5.3
+        if: matrix.spark
+      - uses: actions/download-artifact@v4
+        with:
+          name: altryx-wheel
+          path: dist
+      - name: Validate Marketplace assets offline
+        run: python marketplace/publish.py --dry-run
       - name: Run test suite
-        run: pytest tests/ -q --tb=short
+        run: python -I -m pytest tests/ -q --tb=short
+
+      - name: Committed output drift gate
+        run: git diff --exit-code -- tests/output
 
       - name: End-to-end sample conversion
         run: |
@@ -69,6 +116,11 @@ jobs:
       - name: databricks bundle validate
         if: env.DATABRICKS_HOST != ''
         run: databricks bundle validate -t dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyyaml
 
       - name: Offline bundle checks (no workspace secrets configured)
         if: env.DATABRICKS_HOST == ''
