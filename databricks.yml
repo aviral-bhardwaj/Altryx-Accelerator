@@ -18,11 +18,10 @@ include:
   - resources/*.yml
 
 # Files synced into the workspace on `bundle deploy`. Shared Python modules in
-# src/ are importable from the notebook via sys.path (see the Skill Mode
-# notebook's setup cell).
+# altryx_accelerator/ contains the standalone validation task; notebooks install the release wheel.
 sync:
   paths:
-    - src
+    - altryx_accelerator
     - notebooks
     - config
     - requirements.txt

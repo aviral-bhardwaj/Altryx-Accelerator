@@ -62,3 +62,47 @@ def test_notebook_run_all(tmp_path, monkeypatch):
     assert exported.cells[0].cell_type == "markdown"
     assert "Conversion Validation Report" in exported.cells[0].source
     assert exported.cells[0].source.startswith("## ✅") or "PASS" in exported.cells[0].source
+
+
+def test_quickstart_run_all(tmp_path, monkeypatch):
+    """All quickstart cells run locally; bootstrap uses the installed distribution."""
+    monkeypatch.setenv('SKILL_OUTPUT_DIR', str(tmp_path))
+    notebook = NOTEBOOK.with_name('02_Quickstart_Convert_Sample_Workflows.ipynb')
+    nb = nbformat.read(notebook, as_version=4)
+    namespace = {'__name__': '__main__'}
+    for cell in nb.cells:
+        if cell.cell_type == 'code' and 'bootstrap' not in cell.metadata.get('tags', []):
+            exec(compile(cell.source, str(notebook), 'exec'), namespace)
+    summary = json.loads((tmp_path/'conversion_summary.json').read_text())
+    assert len(summary) == 4
+    assert all(v['status'] in ('PASS','WARNING') and not v['unsupported'] for v in summary.values())
+    assert len(list(tmp_path.glob('*.ipynb'))) == 4
+    assert len(list(tmp_path.glob('*.py'))) == 4
+
+
+def test_quickstart_from_installed_wheel(tmp_path, monkeypatch):
+    """A stranger's wheel install has no checkout on its import path."""
+    import os
+    import subprocess
+    import sys
+    root = NOTEBOOK.parents[1]
+    wheel = root / 'dist/altryx_accelerator-1.1.0-py3-none-any.whl'
+    if not wheel.exists():
+        subprocess.run([sys.executable, '-m', 'build', '--wheel', '--no-isolation', str(root)], check=True, capture_output=True)
+    install = tmp_path/'installed'
+    subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-deps', '--target', str(install), str(wheel)], check=True, capture_output=True)
+    script = tmp_path/'run_quickstart.py'
+    script.write_text('''import json,sys
+sys.path.insert(0, sys.argv[1])
+import altryx_accelerator
+assert altryx_accelerator.__version__ == "1.1.0"
+assert altryx_accelerator.__file__.startswith(sys.argv[1])
+nb = json.load(open(sys.argv[2]))
+namespace = {"__name__": "__main__"}
+for cell in nb["cells"]:
+    if cell["cell_type"] == "code" and "bootstrap" not in cell["metadata"].get("tags", []):
+        exec("".join(cell["source"]), namespace)
+''')
+    monkeypatch.setenv('SKILL_OUTPUT_DIR', str(tmp_path/'outputs'))
+    subprocess.run([sys.executable, '-I', str(script), str(install), str(NOTEBOOK.with_name('02_Quickstart_Convert_Sample_Workflows.ipynb'))], cwd=tmp_path, env=os.environ.copy(), check=True, capture_output=True)
+    assert len(list((tmp_path/'outputs').glob('*.ipynb'))) == 4

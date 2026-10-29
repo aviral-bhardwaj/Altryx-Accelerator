@@ -44,7 +44,7 @@ resources:
         - task_key: convert_workflows
           job_cluster_key: converter_cluster
           notebook_task:
-            notebook_path: ../notebooks/01_Skill_Mode_Alteryx_to_Databricks.ipynb
+            notebook_path: ../notebooks/04_Batch_Migration_Job.ipynb
             base_parameters:
               batch_mode: "true"
               input_dir: "{{job.parameters.input_dir}}"
@@ -53,14 +53,14 @@ resources:
               target_schema: "{{job.parameters.target_schema}}"
               output_format: "ipynb"   # ipynb+py collide in a /Workspace output folder
               max_iterations: "3"
-              run_sample_validation: "true"
+              run_sample_validation: "false"
 
         - task_key: validate_outputs
           depends_on:
             - task_key: convert_workflows
           job_cluster_key: converter_cluster
           spark_python_task:
-            python_file: ../src/job_validate.py
+            python_file: ../altryx_accelerator/job_validate.py
             parameters:
               - "{{job.parameters.output_dir}}"
 

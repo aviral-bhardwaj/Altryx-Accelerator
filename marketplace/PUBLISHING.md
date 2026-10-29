@@ -1,89 +1,58 @@
-# Publishing to Databricks Marketplace
+# Publish Altryx Accelerator 1.1.0
 
-This runbook takes the accelerator from this repo to a live listing on
-[Databricks Marketplace](https://marketplace.databricks.com). Values to paste
-into the Provider Console live in [`listing.yaml`](listing.yaml).
+This is a **Notebooks + Files** Marketplace product. It is not a solution-accelerator listing type or a partner-listed Databricks App. Consumers receive assets in a Delta Sharing share, not this Git repository. The share contains four notebook assets (below the ten-notebook limit) and a Unity Catalog Volume containing the wheel, four sample workflows, notebook copies and README.pdf.
 
-## 1. Become a Marketplace provider
-
-1. You need a Databricks account on **Unity Catalog-enabled** workspaces and
-   the **Marketplace admin** entitlement (account admin grants this in the
-   account console).
-2. Apply via **Partner Portal → Become a Marketplace provider** (or ask your
-   Databricks account team). Legal onboarding requires:
-   - Provider display name and logo (512×512 PNG)
-   - Company description
-   - Support contact (email or URL)
-   - Privacy policy URL and terms of service
-3. Once approved, the **Provider Console** appears under
-   **Marketplace → Provider console** in your workspace.
-
-## 2. Prepare the assets
-
-Marketplace listings for solution accelerators are **notebook-based**; data
-products are shared via Delta Sharing. This accelerator ships everything you
-need:
-
-| Asset | Where |
-|---|---|
-| Skill Mode notebook | `notebooks/01_Skill_Mode_Alteryx_to_Databricks.ipynb` |
-| Library code (synced by the bundle) | `src/`, `config/` |
-| Sample workflows for the demo | `tests/sample_workflows/*.yxmd` |
-| License / terms | `LICENSE` (MIT) |
-| Long-form listing copy | `marketplace/listing.yaml` → `description` |
-
-Before submitting:
+## Prepare and validate locally
 
 ```bash
-pytest tests/ -q                      # 271 tests must pass
-databricks bundle validate -t dev     # bundle must validate cleanly
-python convert.py tests/sample_workflows --batch --self-correct \
-    --format ipynb --output-dir ./demo_output
+python -m pip install '.[dev]'
+SOURCE_DATE_EPOCH=1793232000 python -m build
+python marketplace/build_notebooks.py
+python marketplace/publish.py --dry-run
 ```
 
-Import `demo_output/*.ipynb` into a clean workspace and Run All — this is
-exactly what a Marketplace reviewer (and your first customer) will do.
+`--dry-run` validates versions, notebook format, package data, release fallback URLs, the four samples, icon and PDF without constructing a workspace client. It does not verify workspace permissions, private-exchange membership, privacy-page availability or Databricks Runtime execution.
 
-Add the media files referenced by `listing.yaml`:
+## Publish first to a Private Exchange
 
-- `marketplace/assets/icon.png` — 512×512 product icon
-- Screenshots of §3 (DAG visualization) and §6 (self-correction report)
-  from the Skill Mode notebook
+An account administrator must enable the appropriate Marketplace provider and Unity Catalog capabilities. Configure a provider profile and Marketplace admin permissions. Public publication requires Premium, Unity Catalog, account-admin setup and approval through the Databricks Data Partner Program. Private providers follow the private-provider onboarding flow.
 
-## 3. Create the listing
+Use an existing UC catalog and schema with managed storage; the publishing identity needs USE CATALOG, USE SCHEMA, CREATE VOLUME, read/write volume permissions and permission to create/update shares. Authenticate using the CLI profile or Databricks environment credentials. Never put credentials into this repository.
 
-In **Provider console → Listings → Create listing**:
+```bash
+databricks auth login --profile marketplace
+python marketplace/publish.py --profile marketplace \
+  --catalog main --schema marketplace --volume altryx_accelerator \
+  --share altryx_accelerator
+```
 
-1. **Listing type**: choose the notebook/solution-accelerator flow (not a
-   Delta Sharing data product).
-2. Copy `title`, `subtitle`, `description`, `categories` from `listing.yaml`.
-3. **Assets**: attach the Skill Mode notebook. Recommended: also link the Git
-   repo (customers clone it as a Git folder and get the full bundle — the
-   notebook auto-detects the bundle root either way).
-4. **Access**: `Instantly available` (free) is the fastest path to publish;
-   switch to `Request access` if you want lead capture.
-5. Attach the license/terms (MIT) and support contact.
-6. Submit for review. Databricks reviews new listings before they go public —
-   typical review checks: the notebook runs top-to-bottom on a fresh cluster
-   (DBR 13.3+), no hardcoded credentials/hosts, description matches behavior.
+The script creates the managed Volume if absent, overwrites the versioned release assets, creates the share if absent, adds the Volume and adds/updates all four NOTEBOOK_FILE assets. It preserves unrelated share assets. Configure equivalent defaults with ALTRYX_CATALOG, ALTRYX_SCHEMA, ALTRYX_VOLUME and ALTRYX_SHARE. The catalog and schema must exist before running.
 
-## 4. Versioning & updates
+1. Open **Marketplace → Provider console → Private exchanges**. Create an exchange and invite a separate test consumer account.
+2. Select **Listings → Create listing**. Copy the fields printed by the script from `listing.yaml`.
+3. Choose **Notebooks** and **Files**, then select the `altryx_accelerator` share.
+4. Select the private exchange as the audience. Attach `marketplace/assets/icon.png`, verify the public privacy-policy page exists, review and publish privately.
+5. As the test consumer, get the product, install its shared catalog and import the four notebooks. Set `wheel_path` to the consumer's actual `/Volumes/<shared_catalog>/<schema>/altryx_accelerator/altryx_accelerator-1.1.0-py3-none-any.whl`, and `samples_dir` to the sibling `samples` folder.
+6. Attach a UC-enabled cluster, Run All in notebook 02, then run 01 with your own workflow. For external inputs use 03 to map input tool IDs/annotations/path fragments to UC tables. Verify output values against your Alteryx baseline before production use.
+7. Once consumer acceptance passes and public-provider approval is complete, use Provider Console to submit the listing for public review.
 
-- Bump `version` in `pyproject.toml` and `src/__init__.py`, update
-  `CHANGELOG.md`, tag the release in Git.
-- Re-attach the refreshed notebook (or let the linked Git repo carry the
-  update) and edit the listing in the Provider Console; edits go through the
-  same lightweight review.
-- Keep `main` deployable at all times — `.github/workflows/bundle-deploy.yml`
-  gates every push with the test suite + `databricks bundle validate`.
+Notebook 04 is also the Asset Bundle job entry point. The job's ipynb-only override avoids Workspace notebook-name collisions; interactive and CLI defaults emit both ipynb and py. The bundle developer workflow is optional and is not delivered through the listing.
 
-## 5. Review checklist (pre-submission)
+## Installation and offline behavior
 
-- [ ] `pytest` green and CI passing on `main`
-- [ ] `databricks bundle validate` passes for `dev`, `staging`, `prod`
-- [ ] Skill Mode notebook runs end-to-end on DBR 13.3+ with default widgets
-      (uses the bundled sample workflows — no external data needed)
-- [ ] No secrets, tokens, or workspace hostnames anywhere in the repo
-- [ ] LICENSE, support contact, and privacy policy URL current
-- [ ] Icon + at least 2 screenshots uploaded
-- [ ] Listing description spell-checked and matches actual capabilities
+Every notebook starts with wheel_path/pip_fallback widgets and notebook-scoped `%pip` installation, followed by `dbutils.library.restartPython()`. All subsequent cells re-import state and read persisted widgets. The release URL is:
+
+`https://github.com/aviral-bhardwaj/Altryx-Accelerator/releases/download/v1.1.0/altryx_accelerator-1.1.0-py3-none-any.whl`
+
+A hidden input cell embeds the built wheel as a base64 zip if it is smaller than 300 KB. This offline fallback installs without downloading dependencies: lxml, PyYAML and nbformat must already be available. For a fully disconnected cluster, install those dependencies from your organization's approved wheelhouse first. A volume wheel takes precedence, then the GitHub release, then the embedded wheel. Rebuild the embedded payload after any package change.
+
+The release workflow attaches the wheel on tag `v1.1.0`; before that tag completes, the Volume wheel or embedded fallback is required. Publishing a share does not create a Marketplace listing automatically: audience and commercial/provider details are finalized in Provider Console.
+
+## References
+
+- [Create a Marketplace listing](https://docs.databricks.com/aws/en/marketplace/create-listing)
+- [Become a Marketplace provider](https://docs.databricks.com/aws/en/marketplace/get-started-provider)
+- [Private exchanges](https://docs.databricks.com/aws/en/marketplace/private-exchange)
+- [SDK share objects: NOTEBOOK_FILE content and VOLUME](https://databricks-sdk-py.readthedocs.io/en/stable/dbdataclasses/sharing.html)
+
+Partner-published Databricks Apps are not currently a Marketplace delivery option; this release uses supported notebook and file assets.
