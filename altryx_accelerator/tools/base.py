@@ -9,7 +9,7 @@ Shared infrastructure for the plugin-style tool registry:
 - ``topological_sort``  : Kahn's algorithm over the workflow DAG
 
 New Alteryx tools are added by subclassing ``ToolConverter`` in
-``src/tools/`` and registering them via ``@register("ToolType")`` —
+``altryx_accelerator/tools/`` and registering them via ``@register("ToolType")`` —
 no changes to the core engine or notebook are required.
 """
 
@@ -133,7 +133,7 @@ class GeneratorContext:
                     return vars_map[origin_port]
                 if "Output" in vars_map:
                     return vars_map["Output"]
-        return f"df_{tool_id}_input"
+        return "spark.createDataFrame([], schema='')"
 
     def get_input_var_for_port(self, tool_id: int, port: str) -> str:
         """Get input variable for a specific named port (e.g., 'Left', 'Right')."""

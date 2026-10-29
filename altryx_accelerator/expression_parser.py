@@ -157,7 +157,7 @@ class ExpressionLexer:
 
     def __init__(self):
         self._regex = re.compile(
-            "|".join(f"(?P<{name}>{pattern})" for name, pattern in self.PATTERNS)
+            "|".join(f"(?P<{name}>{pattern})" for name, pattern in self.PATTERNS), re.IGNORECASE
         )
 
     def tokenize(self, expression: str) -> list:
@@ -189,7 +189,8 @@ class ExpressionParser:
     Converts to PySpark expression strings.
     """
 
-    def __init__(self):
+    def __init__(self, string_fields=()):
+        self._string_fields = set(string_fields)
         self._lexer = ExpressionLexer()
         self._tokens = []
         self._pos = 0
@@ -232,7 +233,7 @@ class ExpressionParser:
         tok = self._peek()
         if tok is None:
             raise SyntaxError(f"Expected {type_} but got end of expression")
-        if tok.type != type_ or (value and tok.value != value):
+        if tok.type != type_ or (value and tok.value.upper() != value.upper()):
             raise SyntaxError(f"Expected {type_}({value}) but got {tok}")
         return self._advance()
 
@@ -305,7 +306,10 @@ class ExpressionParser:
             if tok and tok.type == "OP_PLUS":
                 self._advance()
                 right = self._parse_multiplication()
-                left = f"{left} + {right}"
+                string_terms = ('F.concat(', 'F.upper(', 'F.lower(', 'F.trim(', 'F.substring(')
+                def is_string(term):
+                    return term.startswith(string_terms) or term.startswith(('F.lit("', "F.lit('")) or any(term == f'F.col("{name}")' for name in self._string_fields)
+                left = f"F.concat({left}, {right})" if is_string(left) or is_string(right) else f"{left} + {right}"
             elif tok and tok.type == "OP_MINUS":
                 self._advance()
                 right = self._parse_multiplication()
@@ -485,6 +489,8 @@ class ExpressionParser:
 
     def _convert_function(self, func_name: str, args: list) -> str:
         """Convert an Alteryx function call to PySpark."""
+        # Alteryx function names are case-insensitive.
+        func_name = next((name for name in FUNCTION_MAP if name.lower() == func_name.lower()), func_name)
         # Look up in the function map
         if func_name in FUNCTION_MAP:
             template, expected_args = FUNCTION_MAP[func_name]
@@ -501,7 +507,7 @@ class ExpressionParser:
         return f"F.{func_name}({arg_str})"
 
 
-def convert_expression(expression: str) -> str:
+def convert_expression(expression: str, string_fields=()) -> str:
     """
     Convenience function: convert a single Alteryx expression to PySpark.
 
@@ -511,7 +517,7 @@ def convert_expression(expression: str) -> str:
     Returns:
         PySpark expression string.
     """
-    parser = ExpressionParser()
+    parser = ExpressionParser(string_fields=string_fields)
     return parser.parse(expression)
 
 

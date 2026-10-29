@@ -1,5 +1,5 @@
 """
-src.tools — plugin-style Alteryx tool converter registry.
+altryx_accelerator.tools — plugin-style Alteryx tool converter registry.
 
 Import order matters: importing this package loads the built-in converters,
 which self-register via the @register decorator.

@@ -7,7 +7,8 @@ def print_banner():
     """Print the application banner."""
     print()
     print("=" * 60)
-    print("  Alteryx -> PySpark AI Converter (Powered by Claude)")
+    from . import __version__
+    print(f"  Altryx Accelerator {__version__} | Alteryx -> PySpark")
     print("=" * 60)
     print()
 

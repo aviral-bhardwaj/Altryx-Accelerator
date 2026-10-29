@@ -1,0 +1,9 @@
+{
+    "_comment": "Map Alteryx input sources to Databricks table paths. Keys can be ToolIDs or descriptive names.",
+    "nps_fact": "your_catalog.your_schema.nps_fact_prepared",
+    "dim_provider": "your_catalog.your_schema.dim_provider",
+    "dim_time": "your_catalog.your_schema.dim_time",
+    "dim_product": "your_catalog.your_schema.dim_product",
+    "response_data": "your_catalog.your_schema.response_data_prepared",
+    "dim_respondent": "your_catalog.your_schema.dim_respondent"
+}

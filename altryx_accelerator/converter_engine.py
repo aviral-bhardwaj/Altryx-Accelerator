@@ -5,7 +5,7 @@ Core Alteryx → PySpark conversion engine.
 
 Responsibilities:
 - Load the YAML-driven tool mapping (``config/tool_mapping.yaml``) and build
-  the converter map from the plugin registry (``src/tools``).
+  the converter map from the plugin registry (``altryx_accelerator/tools``).
 - Topologically sort the workflow DAG and convert each tool via its plugin.
 - Track per-tool conversion status (converted / partial / unsupported / error)
   so the self-correction loop and the Skill Mode notebook can report progress.
@@ -19,7 +19,7 @@ first-pass parse may have missed, and annotates any still-unsupported tool
 with its full configuration for manual follow-up.
 """
 
-import datetime
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,17 +31,18 @@ from .tools import GeneratorContext, build_converter_map, get_converter, topolog
 
 logger = logging.getLogger(__name__)
 
+PACKAGED_MAPPING_PATH = Path(__file__).resolve().parent / "config" / "tool_mapping.yaml"
 DEFAULT_TOOL_MAPPING_PATH = Path(__file__).resolve().parent.parent / "config" / "tool_mapping.yaml"
 
 # Tool types that never produce runnable transformations.
-NON_CODE_TOOLS = ("Container", "Comment")
+NON_CODE_TOOLS = ("Container", "Comment", "TextBox", "ToolContainer")
 INPUT_TOOLS = ("InputData", "LockInStreamIn", "DynamicInput", "TextInput")
 OUTPUT_TOOLS = ("OutputData", "LockInStreamOut")
 
 
 def load_tool_mapping(path: Optional[str] = None) -> dict:
     """Load config/tool_mapping.yaml (returns {} when missing or PyYAML absent)."""
-    mapping_path = Path(path) if path else DEFAULT_TOOL_MAPPING_PATH
+    mapping_path = Path(path) if path else (DEFAULT_TOOL_MAPPING_PATH if DEFAULT_TOOL_MAPPING_PATH.exists() else PACKAGED_MAPPING_PATH)
     if not mapping_path.exists():
         return {}
     try:
@@ -149,6 +150,37 @@ class ConverterEngine:
             target_schema=self.target_schema,
         )
 
+        source_defaults = {}
+        source_labels = {}
+        for t in tools:
+            if t.tool_type in INPUT_TOOLS and t.tool_type != "TextInput":
+                path = (t.parsed_config or {}).get("table_name", "")
+                default = path if path and "\\" not in path and "/" not in path and path.count(".") >= 1 and not path.lower().endswith((".yxdb", ".xlsx", ".csv", ".parquet")) else None
+                if "\\" not in path and path.lower().endswith((".csv", ".parquet")):
+                    default = path
+                for key, value in self.source_tables_config.items():
+                    if str(key) == str(t.tool_id) or str(key).lower() in (t.annotation + " " + path).lower():
+                        default = value
+                        if str(key) == str(t.tool_id):
+                            break
+                source_defaults[str(t.tool_id)] = default
+                source_labels[str(t.tool_id)] = [t.annotation, path]
+        source_defaults.update({str(k): v for k, v in self.source_tables_config.items()})
+        config_lines = ["# SOURCE_TABLES: map tool ID, annotation, or path substring to a Unity Catalog table.",
+                        "SOURCE_TABLES = " + repr(source_defaults),
+                        "SOURCE_LABELS = " + repr(source_labels),
+                        "WORKFLOW_CONSTANTS = " + repr(workflow.metadata.get("constants", {})),
+                        "def _resolve_source(tool_id):",
+                        "    if SOURCE_TABLES.get(tool_id):",
+                        "        return SOURCE_TABLES[tool_id]",
+                        "    for key, value in SOURCE_TABLES.items():",
+                        "        if value and (str(key) == tool_id or any(str(key).lower() in label.lower() for label in SOURCE_LABELS[tool_id])):",
+                        "            return value",
+                        "    raise ValueError('Map input ' + tool_id + ' in the SOURCE_TABLES configuration cell before running.')"]
+
+        if any(value is None for value in source_defaults.values()):
+            config_lines.insert(0, "# REVIEW: Map unresolved SOURCE_TABLES entries before execution.")
+
         ordered_ids = topological_sort(tools, connections)
         tool_map = {t.tool_id: t for t in tools}
 
@@ -165,6 +197,8 @@ class ConverterEngine:
                 continue
 
             lines, status = self._convert_tool(tool, ctx, strict)
+            for key in workflow.metadata.get("constants", {}):
+                lines = [line.replace(f'F.col("{key}")', f'F.lit(WORKFLOW_CONSTANTS[{key!r}])') for line in lines]
             statuses.append(status)
 
             if tool.tool_type in INPUT_TOOLS:
@@ -188,6 +222,7 @@ class ConverterEngine:
             num_formulas=num_formulas,
             statuses=statuses,
             strict=strict,
+            config_lines=config_lines,
         )
 
         return ConversionResult(
@@ -225,7 +260,7 @@ class ConverterEngine:
         joined = "\n".join(lines)
         if not is_registered:
             msg = (f"No converter registered for Alteryx tool '{tool.tool_type}'. "
-                   f"Passed through unchanged — add a plugin in src/tools/ or map it "
+                   f"Passed through unchanged — add a plugin in altryx_accelerator/tools/ or map it "
                    f"in config/tool_mapping.yaml.")
             lines = [f"# ⚠️ UNSUPPORTED TOOL — {msg}"] + lines
             if strict and tool.configuration_xml:
@@ -235,9 +270,9 @@ class ConverterEngine:
             return lines, ToolStatus(tool.tool_id, tool.tool_type, tool.annotation,
                                      "unsupported", msg)
 
-        if "TODO" in joined:
+        if "TODO" in joined or "REVIEW:" in joined or (self.tool_mapping.get("tools", {}).get(tool.tool_type, {}).get("support") == "partial"):
             return lines, ToolStatus(tool.tool_id, tool.tool_type, tool.annotation,
-                                     "partial", "generated code contains TODO placeholders")
+                                     "partial", "Limited conversion; review this tool before production execution")
 
         return lines, ToolStatus(tool.tool_id, tool.tool_type, tool.annotation, "converted")
 
@@ -270,10 +305,10 @@ class ConverterEngine:
         num_formulas: int,
         statuses: Optional[list] = None,
         strict: bool = False,
+        config_lines=None,
     ) -> str:
         """Assemble code sections into a Databricks source-format notebook."""
         parts = []
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         mode = "strict" if strict else "standard"
 
         parts.append("# Databricks notebook source")
@@ -284,7 +319,7 @@ class ConverterEngine:
         parts.append(f"# MAGIC # {workflow_name}")
         parts.append("# MAGIC Auto-generated by the Alteryx → Databricks Converter Engine")
         parts.append(f"# MAGIC Source: {workflow_name}.yxmd | Mode: {mode}")
-        parts.append(f"# MAGIC Generated: {timestamp}")
+        parts.append("# MAGIC Altryx Accelerator 1.1.0")
         parts.append(f"# MAGIC Complexity: {complexity} ({num_tools} tools, {num_joins} joins, {num_formulas} formulas)")
 
         unsupported = [s for s in (statuses or []) if s.status in ("unsupported", "error")]
@@ -297,6 +332,8 @@ class ConverterEngine:
         parts.append("")
         parts.append("# COMMAND ----------")
         parts.append("")
+        parts.extend(config_lines or [])
+        parts.extend(["", "# COMMAND ----------", ""])
         parts.append("from pyspark.sql import functions as F")
         parts.append("from pyspark.sql.types import *")
         parts.append("from pyspark.sql.window import Window")

@@ -7,7 +7,7 @@ registry via ``@register("ToolType", ...)``.
 
 To add support for a new Alteryx tool:
 
-1. Subclass ``ToolConverter`` here (or in a new module under ``src/tools/``).
+1. Subclass ``ToolConverter`` here (or in a new module under ``altryx_accelerator/tools/``).
 2. Decorate it with ``@register("YourToolType")``.
 3. Optionally declare it in ``config/tool_mapping.yaml`` to override or
    extend the built-in mapping without touching this file.
@@ -70,55 +70,16 @@ class InputDataConverter(ToolConverter):
         var = ctx.make_var_name(tool)
         ctx.set_output_var(tool.tool_id, var)
 
-        # Check source tables config for a mapping
-        for key, value in ctx.source_tables_config.items():
-            if (str(tool.tool_id) == str(key)
-                    or (tool.annotation and key.lower() in tool.annotation.lower())
-                    or (table_name and key.lower() in table_name.lower())):
-                return [f'{var} = spark.table("{value}")  # Tool {tool.tool_id}: InputData']
-
-        if not table_name:
-            return [f'{var} = spark.table("TODO.unknown_table")  # Tool {tool.tool_id}: InputData - NEEDS CONFIG']
-
-        # Alteryx sheet suffix, e.g. "book.xlsx|||`Sheet1$`"
-        sheet = ""
-        if "|||" in table_name:
-            table_name, sheet = table_name.split("|||", 1)
-
-        lower_table = table_name.lower()
-        fwd_path = table_name.replace("\\", "/")
-        is_local_path = bool(re.match(r"^[a-z]:[\\/]", lower_table)) or "\\" in table_name
-
-        # Local Alteryx sources (.yxdb or Windows paths without a readable
-        # format) cannot be read by Spark — emit a mapping TODO instead of
-        # broken code, preserving the original path for the migration team.
-        if lower_table.endswith(".yxdb") or (
-            is_local_path and not lower_table.endswith((".csv", ".xlsx", ".xls", ".parquet"))
-        ):
-            stem = _identifier(fwd_path.rsplit("/", 1)[-1].rsplit(".", 1)[0])
-            return [
-                f"# Tool {tool.tool_id}: InputData — local Alteryx source, needs a Unity Catalog mapping",
-                f"# TODO: map via source-tables config. Original source: {fwd_path}",
-                f'{var} = spark.table("TODO.{stem}")',
-            ]
-
-        if lower_table.endswith(".csv"):
-            return [f'{var} = spark.read.csv({pystr(fwd_path)}, header=True, inferSchema=True)  # Tool {tool.tool_id}']
-        elif lower_table.endswith((".xlsx", ".xls")):
-            sheet_comment = f"  # sheet: {sheet}" if sheet else ""
-            return [
-                f'{var} = spark.read.format("com.crealytics.spark.excel")'
-                f'.option("header", "true").option("inferSchema", "true")'
-                f'.load({pystr(fwd_path)})  # Tool {tool.tool_id}{sheet_comment}'
-            ]
-        elif lower_table.endswith(".parquet"):
-            return [f'{var} = spark.read.parquet({pystr(fwd_path)})  # Tool {tool.tool_id}']
-        elif "." in table_name and not table_name.startswith("/") and not is_local_path:
-            # Looks like a catalog.schema.table reference
-            return [f'{var} = spark.table("{table_name}")  # Tool {tool.tool_id}']
-        else:
-            # JDBC / other
-            return [f'{var} = spark.table("TODO.{_identifier(fwd_path)}")  # Tool {tool.tool_id}: InputData']
+        if table_name and "\\" not in table_name:
+            fmt = "csv" if table_name.lower().endswith(".csv") else "parquet" if table_name.lower().endswith(".parquet") else None
+            if fmt:
+                options = ", header=True, inferSchema=True" if fmt == "csv" else ""
+                return [f"_source_{tool.tool_id} = _resolve_source({str(tool.tool_id)!r})",
+                        f"if _source_{tool.tool_id}.lower().endswith('.{fmt}'):",
+                        f"    {var} = spark.read.{fmt}(_source_{tool.tool_id}{options})  # Tool {tool.tool_id}",
+                        "else:", f"    {var} = spark.table(_source_{tool.tool_id})"]
+        # All sources are editable in the generated notebook's first config cell.
+        return [f'{var} = spark.table(_resolve_source({str(tool.tool_id)!r}))  # Tool {tool.tool_id}: InputData']
 
 
 _INT_RE = re.compile(r"^[+-]?(0|[1-9][0-9]*)$")
@@ -269,6 +230,20 @@ class FormulaConverter(ToolConverter):
             except Exception:
                 pyspark_expr = f'F.expr("{expr}")  # TODO: manual conversion needed'
 
+            if ftype == "Bool":
+                # Alteryx permits 0/1 branches with Boolean fields; Spark requires
+                # branch types to agree before the final withColumn cast.
+                import ast
+                class BooleanBranches(ast.NodeTransformer):
+                    def visit_Call(self, node):
+                        self.generic_visit(node)
+                        if isinstance(node.func, ast.Attribute):
+                            index = 1 if node.func.attr == "when" else 0 if node.func.attr == "otherwise" else None
+                            if index is not None and len(node.args) > index:
+                                node.args[index] = ast.Call(func=ast.Attribute(value=node.args[index], attr="cast", ctx=ast.Load()), args=[ast.Constant("boolean")], keywords=[])
+                        return node
+                pyspark_expr = ast.unparse(BooleanBranches().visit(ast.parse(pyspark_expr, mode="eval")))
+
             lines.append(f'{var} = {var}.withColumn("{field}", {pyspark_expr})')
             if ftype:
                 spark_type = SPARK_TYPE_MAP.get(ftype, "")
@@ -354,18 +329,31 @@ class JoinConverter(ToolConverter):
 
         if join_connected:
             join_var = f"df_{tool.tool_id}_joined"
-            lines.append(f'{join_var} = {input_left}.join({input_right}, {join_cond}, "inner")  # Join output')
-
-            # Post-join column handling
             select_config = pc.get("select_config", [])
-            for sf in select_config:
-                field = sf.get("field", "")
-                selected = sf.get("selected", "True")
-                rename = sf.get("rename", "")
-                if selected == "False" and field:
-                    lines.append(f'{join_var} = {join_var}.drop("{field}")')
-                elif rename and field:
-                    lines.append(f'{join_var} = {join_var}.withColumnRenamed("{field}", "{rename}")')
+            if select_config:
+                # Prefix both schemas before joining so duplicate names remain addressable.
+                lp, rp = f"_left_{tool.tool_id}", f"_right_{tool.tool_id}"
+                lines += [f"{lp} = {input_left}.select(*[F.col('`' + c.replace('`', '``') + '`').alias('Left_' + c) for c in {input_left}.columns])",
+                          f"{rp} = {input_right}.select(*[F.col('`' + c.replace('`', '``') + '`').alias('Right_' + c) for c in {input_right}.columns])"]
+                conditions = [f"{lp}[{('Left_' + lk)!r}] == {rp}[{('Right_' + rk)!r}]" for lk,rk in zip(left_keys,right_keys)]
+                cond = " & ".join(f"({c})" for c in conditions) or "F.lit(True)"
+                right_ref = f"F.broadcast({rp})" if any(ctx.tools[c.origin_tool_id].tool_type == "TextInput" for c in ctx.get_incoming(tool.tool_id) if c.dest_connection == "Right") else rp
+                lines += [f'{join_var} = {lp}.join({right_ref}, {cond}, "inner")',
+                          f"_spec_{tool.tool_id} = {{s['field']: s for s in {select_config!r}}}",
+                          f"_projection_{tool.tool_id}, _used_{tool.tool_id} = [], set()",
+                          f"for _c in {join_var}.columns:",
+                          f"    _raw = _c.split('_', 1)[1]",
+                          f"    _s = _spec_{tool.tool_id}.get(_c, _spec_{tool.tool_id}.get(_raw, {{}}))",
+                          f"    if _s.get('selected', 'True') == 'False':",
+                          f"        continue",
+                          f"    _name = _s.get('rename') or _raw",
+                          f"    if _name in _used_{tool.tool_id}:",
+                          f"        _name = _c",
+                          f"    _used_{tool.tool_id}.add(_name)",
+                          f"    _projection_{tool.tool_id}.append(F.col('`' + _c.replace('`', '``') + '`').alias(_name))",
+                          f"{join_var} = {join_var}.select(*_projection_{tool.tool_id})"]
+            else:
+                lines.append(f'{join_var} = {input_left}.join({input_right}, {join_cond}, "inner")  # Join output')
 
             ctx.set_output_var(tool.tool_id, join_var, "Join")
             ctx.set_output_var(tool.tool_id, join_var, "Output")
@@ -682,7 +670,7 @@ class MultiRowFormulaConverter(ToolConverter):
                 try:
                     pyspark_expr = convert_expression(expr) if expr else 'F.lit(None)'
                 except Exception:
-                    pyspark_expr = f'F.lit(None)  # TODO: "{expr}"'
+                    pyspark_expr = 'F.lit(None)'
                 lines.append(f'{var} = {var}.withColumn("{field}", {pyspark_expr})')
 
         return lines
@@ -778,7 +766,7 @@ class RunningTotalConverter(ToolConverter):
         lines = [f"# Tool {tool.tool_id}: RunningTotal"]
         lines.append(f"_w_rt_{tool.tool_id} = Window.orderBy(F.monotonically_increasing_id()).rowsBetween(Window.unboundedPreceding, Window.currentRow)")
         lines.append(f"{var} = {input_var}")
-        lines.append(f'# TODO: Add running total columns: {var} = {var}.withColumn("running_total", F.sum("value_col").over(_w_rt_{tool.tool_id}))')
+        lines.append(f'# REVIEW: Add running total columns: {var} = {var}.withColumn("running_total", F.sum("value_col").over(_w_rt_{tool.tool_id}))')
         return lines
 
 
@@ -803,7 +791,7 @@ class TextToColumnsConverter(ToolConverter):
         ctx.set_output_var(tool.tool_id, var)
 
         lines = [f"# Tool {tool.tool_id}: TextToColumns"]
-        lines.append(f'{var} = {input_var}  # TODO: configure split field and delimiter')
+        lines.append(f'{var} = {input_var}  # REVIEW: configure split field and delimiter')
         return lines
 
 
@@ -815,21 +803,74 @@ class DateTimeConverter(ToolConverter):
         input_var = ctx.get_input_var(tool.tool_id)
         var = ctx.make_var_name(tool)
         ctx.set_output_var(tool.tool_id, var)
-        return [f"{var} = {input_var}  # Tool {tool.tool_id}: DateTime - TODO: configure format conversion"]
+        return [f"{var} = {input_var}  # Tool {tool.tool_id}: DateTime - REVIEW: configure format conversion"]
 
 
 @register("DynamicRename")
 class DynamicRenameConverter(ToolConverter):
-    """Convert DynamicRename tools."""
+    """Translate actual Designer XML, including L/R lookup connections."""
 
     def convert(self, tool: Tool, ctx: GeneratorContext) -> list:
-        input_var = ctx.get_input_var(tool.tool_id)
+        from ..parser import ET, SAFE_XML_PARSER
+        root = ET.fromstring((tool.configuration_xml or "<Configuration/>").encode(), SAFE_XML_PARSER)
+        mode = root.findtext("RenameMode", "Formula")
+        fields = {f.get("name"): f.get("selected", "True").lower() != "false"
+                  for f in root.findall("Fields/Field")}
+        input_var = ctx.get_input_var_for_port(tool.tool_id, "Left")
+        incoming = ctx.get_incoming(tool.tool_id)
+        left = next((c for c in incoming if c.dest_connection in ("Left", "L", "Input", "Targets")), None)
+        right = next((c for c in incoming if c.dest_connection in ("Right", "R", "Source")), None)
+        if left:
+            input_var = ctx.df_vars[left.origin_tool_id].get(left.origin_connection, ctx.df_vars[left.origin_tool_id].get("Output"))
+        else:
+            input_var = ctx.get_input_var(tool.tool_id)
         var = ctx.make_var_name(tool)
         ctx.set_output_var(tool.tool_id, var)
-
-        lines = [f"# Tool {tool.tool_id}: DynamicRename"]
-        lines.append(f"{var} = {input_var}")
-        lines.append("# TODO: Apply dynamic rename rules from configuration")
+        prefix = f"_rename_{tool.tool_id}"
+        lines = [f"# Tool {tool.tool_id}: DynamicRename ({mode})",
+                 f"{prefix}_fields = {fields!r}",
+                 f"{prefix}_cols = [c for c in {input_var}.columns if {prefix}_fields.get(c, {prefix}_fields.get('*Unknown', not {prefix}_fields))]",
+                 f"{prefix}_map = {{}}"]
+        norm = mode.lower().replace(" ", "")
+        if norm in ("firstrow", "firstrowofdata"):
+            lines += [f"{prefix}_data = {input_var}", f"{prefix}_rows = {input_var}.take(1)",
+                      f"if {prefix}_rows:",
+                      f"    {prefix}_map = {{c: str({prefix}_rows[0][c]) for c in {prefix}_cols if {prefix}_rows[0][c] is not None}}",
+                      # exceptAll removes one matching row, preserving duplicate data rows.
+                      f"    {prefix}_data = {input_var}.exceptAll(spark.createDataFrame({prefix}_rows, {input_var}.schema))"]
+        elif norm in ("rightinput", "rightinputrows", "rightinputfieldnames"):
+            if right is None:
+                raise ValueError("DynamicRename lookup requires an R/Right input")
+            rv = ctx.df_vars[right.origin_tool_id].get(right.origin_connection, ctx.df_vars[right.origin_tool_id].get("Output"))
+            old = root.findtext("NamesFromRows/OldName", "OldName")
+            new = root.findtext("NamesFromRows/NewName", "NewName")
+            if norm == "rightinputfieldnames":
+                lines += [f"{prefix}_map = dict(zip({prefix}_cols, {rv}.columns))"]
+            elif root.findtext("NamesFromRows/InputMode", "Mapped") == "Position":
+                lines += [f"{prefix}_map = dict(zip({prefix}_cols, [str(r[{new!r}]) for r in {rv}.select({new!r}).collect()]))"]
+            else:
+                lines += [f"{prefix}_map = {{str(r[0]): str(r[1]) for r in {rv}.select({old!r}, {new!r}).collect() if r[0] is not None and r[1] is not None}}"]
+        elif norm == "formula":
+            expr = convert_expression(root.findtext("Expression", "[_CurrentField_]"), string_fields={"_CurrentField_"})
+            lines += [f"if {prefix}_cols:",
+                      f"    {prefix}_names = spark.createDataFrame([(c,) for c in {prefix}_cols], ['_CurrentField_'])",
+                      f"    {prefix}_map = {{r[0]: str(r[1]) for r in {prefix}_names.select(F.col('_CurrentField_'), ({expr}).alias('_new')).collect() if r[1] is not None}}"]
+        else:
+            kind = 'RemovePrefixSuffix' if norm.startswith('remove') else 'AddPrefixSuffix'
+            side = root.findtext(f"{kind}/Type", 'Suffix' if 'suffix' in norm else 'Prefix').lower()
+            text = root.findtext(f"{kind}/Text", root.findtext('Text', ''))
+            if norm.startswith('add'):
+                expression = f"{text!r} + c" if side == 'prefix' else f"c + {text!r}"
+            elif norm.startswith('remove'):
+                expression = (f"c[len({text!r}):] if {text!r} and c.startswith({text!r}) else c" if side == 'prefix'
+                              else f"c[:-len({text!r})] if {text!r} and c.endswith({text!r}) else c")
+            else:
+                case = root.findtext('ChangeCase/Type', root.findtext('Case', mode)).lower()
+                operation = 'upper' if 'upper' in case else 'lower' if 'lower' in case else 'title'
+                expression = f"c.{operation}()"
+            lines += [f"{prefix}_map = {{c: ({expression}) for c in {prefix}_cols}}"]
+        data_var = f"{prefix}_data" if norm in ("firstrow", "firstrowofdata") else input_var
+        lines += [f"{var} = {data_var}.select(*[F.col('`' + c.replace('`', '``') + '`').alias({prefix}_map.get(c, c) if c in {prefix}_cols else c) for c in {input_var}.columns])"]
         return lines
 
 
@@ -842,8 +883,8 @@ class GenerateRowsConverter(ToolConverter):
         ctx.set_output_var(tool.tool_id, var)
         return [
             f"# Tool {tool.tool_id}: GenerateRows",
-            "# TODO: configure row generation logic",
-            f'{var} = spark.range(0, 100).toDF("RowCount")  # placeholder',
+            "# REVIEW: GenerateRows expressions are not translated; empty output until implemented.",
+            f'{var} = spark.range(0).toDF("RowCount")',
         ]
 
 
@@ -857,7 +898,7 @@ class MultiFieldFormulaConverter(ToolConverter):
         ctx.set_output_var(tool.tool_id, var)
         return [
             f"# Tool {tool.tool_id}: MultiFieldFormula",
-            f"{var} = {input_var}  # TODO: apply formula across multiple fields",
+            f"{var} = {input_var}  # REVIEW: formula across multiple fields requires implementation",
         ]
 
 
@@ -871,7 +912,7 @@ class FindReplaceConverter(ToolConverter):
         ctx.set_output_var(tool.tool_id, var)
         return [
             f"# Tool {tool.tool_id}: FindReplace",
-            f"{var} = {input_var}  # TODO: configure find/replace pairs",
+            f"{var} = {input_var}  # REVIEW: find/replace pairs require implementation",
         ]
 
 

@@ -4,7 +4,7 @@ Tests for the validation framework.
 
 import json
 import pytest
-from src.validation import (
+from altryx_accelerator.validation import (
     SchemaValidator,
     RowCountValidator,
     DataComparator,

@@ -1,6 +1,6 @@
 """
 Backwards-compatibility shim: the validation framework now lives in
-``src/validators.py`` (row/schema/aggregate validation plus the AST-based
+``altryx_accelerator/validators.py`` (row/schema/aggregate validation plus the AST-based
 structural validator used by the self-correction loop).
 """
 

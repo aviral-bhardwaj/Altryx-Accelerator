@@ -13,4 +13,4 @@
 #   ai_generator        - Claude AI-powered code generator (optional AI mode)
 #   utils               - CLI utilities
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

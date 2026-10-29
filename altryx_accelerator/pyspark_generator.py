@@ -2,11 +2,11 @@
 Backwards-compatibility shim.
 
 The deterministic generator was split into:
-- ``src/tools/``            — plugin-style tool converter registry
-- ``src/converter_engine.py`` — YAML-driven conversion engine
+- ``altryx_accelerator/tools/``            — plugin-style tool converter registry
+- ``altryx_accelerator/converter_engine.py`` — YAML-driven conversion engine
 
 This module re-exports the original public API so existing imports
-(`from src.pyspark_generator import ...`) keep working.
+(`from altryx_accelerator.pyspark_generator import ...`) keep working.
 """
 
 from .converter_engine import ConverterEngine, ConversionResult, PySparkCodeGenerator, ToolStatus

@@ -3,8 +3,8 @@ Tests for the deterministic PySpark code generator.
 """
 
 import pytest
-from src.models import Workflow, Container, Tool, Connection
-from src.pyspark_generator import (
+from altryx_accelerator.models import Workflow, Container, Tool, Connection
+from altryx_accelerator.pyspark_generator import (
     PySparkCodeGenerator,
     GeneratorContext,
     topological_sort,
@@ -160,7 +160,9 @@ class TestInputDataConverter:
         lines = InputDataConverter().convert(sample_tool_input, ctx)
         code = "\n".join(lines)
         assert "spark.table" in code
-        assert "catalog.schema.customers" in code
+        assert "_resolve_source('1')" in code
+        generated = PySparkCodeGenerator().generate(_make_workflow([sample_tool_input], []))
+        assert "catalog.schema.customers" in generated
 
     def test_csv_file(self):
         tool = Tool(1, "", "InputData", {}, "", "", parsed_config={"table_name": "/data/file.csv"})
@@ -174,7 +176,7 @@ class TestInputDataConverter:
         ctx = _make_ctx([tool], [])
         lines = InputDataConverter().convert(tool, ctx)
         code = "\n".join(lines)
-        assert "com.crealytics.spark.excel" in code
+        assert "_resolve_source('1')" in code  # Excel must be mapped to UC
 
     def test_parquet_file(self):
         tool = Tool(1, "", "InputData", {}, "", "", parsed_config={"table_name": "/data/file.parquet"})
@@ -188,14 +190,17 @@ class TestInputDataConverter:
         ctx = _make_ctx([tool], [], source_tables={"1": "gold.customers"})
         lines = InputDataConverter().convert(tool, ctx)
         code = "\n".join(lines)
-        assert "gold.customers" in code
+        assert "_resolve_source('1')" in code
+        generated = PySparkCodeGenerator(source_tables_config={"1": "gold.customers"}).generate(_make_workflow([tool], []))
+        assert "gold.customers" in generated
 
     def test_unknown_table(self):
         tool = Tool(1, "", "InputData", {}, "", "", parsed_config={})
         ctx = _make_ctx([tool], [])
         lines = InputDataConverter().convert(tool, ctx)
         code = "\n".join(lines)
-        assert "TODO" in code
+        assert "_resolve_source('1')" in code
+        assert "TODO" not in code
 
 
 class TestTextInputConverter:
@@ -558,6 +563,7 @@ class TestPySparkCodeGenerator:
     def test_generate_with_source_tables(self, sample_workflow):
         gen = PySparkCodeGenerator(source_tables_config={"1": "gold.customers"})
         code = gen.generate(sample_workflow, workflow_name="test")
+        assert "_resolve_source('1')" in code
         assert "gold.customers" in code
 
     def test_generate_has_validation_section(self, sample_workflow):

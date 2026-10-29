@@ -3,7 +3,7 @@ Tests for the Alteryx expression parser.
 """
 
 import pytest
-from src.expression_parser import (
+from altryx_accelerator.expression_parser import (
     ExpressionParser,
     ExpressionLexer,
     convert_expression,

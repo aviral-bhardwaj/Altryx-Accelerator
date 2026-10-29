@@ -847,6 +847,7 @@ import re as _re
 
 # Alteryx tool type -> DataFrame method names, any of which satisfies the tool.
 EXPECTED_OPERATIONS = {
+    "DynamicRename": {"select", "toDF", "withColumnsRenamed"},
     "Filter": {"filter", "where"},
     "LockInFilter": {"filter", "where"},
     "Join": {"join"},
@@ -879,7 +880,7 @@ _STRUCTURAL_IGNORE = {
 
 _KNOWN_GLOBALS = {
     "spark", "F", "Window", "reduce", "dbutils", "display", "displayHTML",
-    "True", "False", "None",
+    "True", "False", "None", "str", "dict", "list", "set", "tuple",
 }
 
 
@@ -1111,6 +1112,9 @@ class StructuralValidator:
         for m in _re.finditer(r"#.*TODO[:\s](.*)", code):
             report.issues.append(StructuralIssue(
                 "WARNING", None, "", f"TODO placeholder: {m.group(1).strip()[:100]}"))
+        for line in code.splitlines():
+            if "REVIEW:" in line:
+                report.issues.append(StructuralIssue("WARNING", None, "", line.split("REVIEW:", 1)[1].strip()))
         if "UNSUPPORTED TOOL" in code:
             report.issues.append(StructuralIssue(
                 "WARNING", None, "",

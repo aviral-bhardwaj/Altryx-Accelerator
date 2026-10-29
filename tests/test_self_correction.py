@@ -8,17 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from src.converter_engine import ConverterEngine, load_tool_mapping
-from src.databricks_exporter import (
+from altryx_accelerator.converter_engine import ConverterEngine, load_tool_mapping
+from altryx_accelerator.databricks_exporter import (
     DatabricksExporter,
     batch_export,
     source_to_cells,
     to_dbc_bytes,
     to_ipynb,
 )
-from src.parser import AlteryxWorkflowParser
-from src.self_correction import SelfCorrectingConverter
-from src.validators import StructuralValidator, ValidationStatus, strip_databricks_magics
+from altryx_accelerator.parser import AlteryxWorkflowParser
+from altryx_accelerator.self_correction import SelfCorrectingConverter
+from altryx_accelerator.validators import StructuralValidator, ValidationStatus, strip_databricks_magics
 
 SAMPLES_DIR = Path(__file__).parent / "sample_workflows"
 SAMPLES = [
@@ -206,8 +206,8 @@ class TestReviewRegressions:
     def test_csv_to_delta_optimization_stays_parseable(self):
         """Regression: the Delta rewrite must not swallow the closing paren."""
         import ast
-        from src.self_correction import SelfCorrectingConverter
-        from src.validators import StructuralIssue, StructuralReport
+        from altryx_accelerator.self_correction import SelfCorrectingConverter
+        from altryx_accelerator.validators import StructuralIssue, StructuralReport
 
         code = 'df_1 = spark.table("a.b.c")\ndf_1.write.csv("/tmp/out.csv", header=True)\n'
         report = StructuralReport()
@@ -219,8 +219,8 @@ class TestReviewRegressions:
 
     def test_var_name_collision_dedupe(self):
         """Regression: identical annotations must not share one variable."""
-        from src.models import Container, Tool, Workflow
-        from src.tools import GeneratorContext
+        from altryx_accelerator.models import Container, Tool, Workflow
+        from altryx_accelerator.tools import GeneratorContext
 
         t1 = Tool(1, "", "Formula", {}, "", "Clean Data")
         t2 = Tool(2, "", "Formula", {}, "", "Clean Data")
@@ -234,7 +234,7 @@ class TestReviewRegressions:
 
     def test_output_temp_view_uses_file_stem(self):
         """Regression: 'output.csv' must give view 'output', not 'csv'."""
-        from src.tools.builtin import _table_leaf_name
+        from altryx_accelerator.tools.builtin import _table_leaf_name
         assert _table_leaf_name("output.csv") == "output"
         assert _table_leaf_name("path/to/book.xlsx") == "book"
         assert _table_leaf_name("catalog.schema.table") == "table"
@@ -242,9 +242,9 @@ class TestReviewRegressions:
 
     def test_output_table_qualified_with_target_catalog(self, parsed):
         """Bare output table names get catalog.schema qualification."""
-        from src.models import Tool, Workflow
-        from src.tools import GeneratorContext
-        from src.tools.builtin import OutputDataConverter
+        from altryx_accelerator.models import Tool, Workflow
+        from altryx_accelerator.tools import GeneratorContext
+        from altryx_accelerator.tools.builtin import OutputDataConverter
 
         tool = Tool(9, "", "OutputData", {}, "", "", parsed_config={"table_name": "results"})
         wf = Workflow(containers=[], all_containers={}, all_tools={9: tool},
@@ -262,9 +262,9 @@ class TestReviewRegressions:
         assert "cat.sch.tbl" in "\n".join(OutputDataConverter().convert(tool2, ctx2))
 
     def test_summarize_first_last_flagged_order_dependent(self):
-        from src.models import Tool, Workflow
-        from src.tools import GeneratorContext
-        from src.tools.builtin import SummarizeConverter
+        from altryx_accelerator.models import Tool, Workflow
+        from altryx_accelerator.tools import GeneratorContext
+        from altryx_accelerator.tools.builtin import SummarizeConverter
 
         tool = Tool(3, "", "Summarize", {}, "", "", parsed_config={
             "summarize_fields": [
@@ -277,7 +277,7 @@ class TestReviewRegressions:
         assert any("order-dependent" in line for line in lines)
 
     def test_html_report_escapes_untrusted_values(self):
-        from src.validators import ReconciliationReporter, ValidationReport
+        from altryx_accelerator.validators import ReconciliationReporter, ValidationReport
 
         report = ValidationReport(workflow_name="<script>alert(1)</script>")
         report.recommendations = ["<img src=x onerror=alert(1)>"]
@@ -304,3 +304,20 @@ class TestReviewRegressions:
             check=True, cwd=Path(__file__).parent.parent, capture_output=True)
         generated = (out_dir / "flow.py").read_text()
         assert "main.mapped.transactions" in generated
+
+
+def test_source_mapping_precedence_and_missing_inputs():
+    from altryx_accelerator.models import Tool, Workflow
+    tool = Tool(1, '', 'InputData', {}, '<Configuration/>', 'customer source', parsed_config={'table_name':'old.schema.table'})
+    workflow = Workflow([],{}, {1:tool}, [], {})
+    engine = ConverterEngine(source_tables_config={'customer':'new.schema.table'})
+    code = engine.convert(workflow).code
+    config = code.split('from pyspark.sql')[0]
+    namespace = {}
+    exec(config, namespace)
+    assert namespace['_resolve_source']('1') == 'new.schema.table'
+    namespace['SOURCE_TABLES'] = {'1':'exact.schema.table','customer':'substring.schema.table'}
+    assert namespace['_resolve_source']('1') == 'exact.schema.table'
+    namespace['SOURCE_TABLES'] = {'1':None}
+    with pytest.raises(ValueError, match='SOURCE_TABLES'):
+        namespace['_resolve_source']('1')

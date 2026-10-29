@@ -139,17 +139,17 @@ class Workflow:
             if conn.origin_tool_id in self.all_tools:
                 src = self.all_tools[conn.origin_tool_id]
                 source_tools[conn.origin_tool_id] = {
-                    "tool_id": src.tool_id,
-                    "type": src.tool_type,
-                    "annotation": src.annotation,
-                    "container": self._find_tool_container_name(src.tool_id),
+                    "tool_id": altryx_accelerator.tool_id,
+                    "type": altryx_accelerator.tool_type,
+                    "annotation": altryx_accelerator.annotation,
+                    "container": self._find_tool_container_name(altryx_accelerator.tool_id),
                     "connection_type": conn.origin_connection,
-                    "parsed_config": src.parsed_config,
-                    "configuration_xml": src.configuration_xml,
+                    "parsed_config": altryx_accelerator.parsed_config,
+                    "configuration_xml": altryx_accelerator.configuration_xml,
                 }
                 # Also include TextInput data from external sources
-                if src.tool_id in self.text_inputs:
-                    source_tools[conn.origin_tool_id]["text_input_data"] = self.text_inputs[src.tool_id]
+                if altryx_accelerator.tool_id in self.text_inputs:
+                    source_tools[conn.origin_tool_id]["text_input_data"] = self.text_inputs[altryx_accelerator.tool_id]
 
         return {
             "container": container,
@@ -229,16 +229,16 @@ class Workflow:
             if conn.origin_tool_id in self.all_tools:
                 src = self.all_tools[conn.origin_tool_id]
                 source_tools[conn.origin_tool_id] = {
-                    "tool_id": src.tool_id,
-                    "type": src.tool_type,
-                    "annotation": src.annotation,
-                    "container": self._find_tool_container_name(src.tool_id),
+                    "tool_id": altryx_accelerator.tool_id,
+                    "type": altryx_accelerator.tool_type,
+                    "annotation": altryx_accelerator.annotation,
+                    "container": self._find_tool_container_name(altryx_accelerator.tool_id),
                     "connection_type": conn.origin_connection,
-                    "parsed_config": src.parsed_config,
-                    "configuration_xml": src.configuration_xml,
+                    "parsed_config": altryx_accelerator.parsed_config,
+                    "configuration_xml": altryx_accelerator.configuration_xml,
                 }
-                if src.tool_id in self.text_inputs:
-                    source_tools[conn.origin_tool_id]["text_input_data"] = self.text_inputs[src.tool_id]
+                if altryx_accelerator.tool_id in self.text_inputs:
+                    source_tools[conn.origin_tool_id]["text_input_data"] = self.text_inputs[altryx_accelerator.tool_id]
 
         # Create a virtual container to represent root-level tools
         virtual_container = Container(

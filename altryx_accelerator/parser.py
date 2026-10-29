@@ -309,6 +309,15 @@ class AlteryxWorkflowParser:
             "yxmd_version": self.root.get("yxmdVer", "unknown"),
         }
 
+        constants = {}
+        for const in self.root.findall("Properties/Constants/Constant"):
+            key = _get_text(const, "Namespace") + "." + _get_text(const, "Name")
+            value = _get_text(const, "Value")
+            if _get_attr(const, "IsNumeric", "value") == "True":
+                value = float(value) if "." in value else int(value)
+            constants[key] = value
+        metadata["constants"] = constants
+
         workflow = Workflow(
             containers=sorted(top_level_containers, key=lambda c: c.tool_id),
             all_containers=all_containers,
@@ -430,6 +439,14 @@ class AlteryxWorkflowParser:
 
         # Extract structured configuration from XML
         parsed_config = _extract_structured_config(config, tool_type)
+
+        if props is not None:
+            metadata_fields = [{"name": f.get("name", ""), "type": f.get("type", "V_String")}
+                               for f in props.findall("MetaInfo[@connection='Output']/RecordInfo/Field")]
+            if metadata_fields:
+                parsed_config["output_fields"] = metadata_fields
+                if tool_type == "InputData":
+                    parsed_config["fields"] = metadata_fields
 
         # Annotation
         annotation = ""

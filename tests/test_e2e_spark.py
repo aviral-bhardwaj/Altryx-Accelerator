@@ -12,28 +12,13 @@ import pytest
 
 pyspark = pytest.importorskip("pyspark")
 
-from src.converter_engine import ConverterEngine
-from src.parser import AlteryxWorkflowParser
-from src.self_correction import SelfCorrectingConverter
-from src.validators import run_generated_code, strip_databricks_magics
+from altryx_accelerator.converter_engine import ConverterEngine
+from altryx_accelerator.parser import AlteryxWorkflowParser
+from altryx_accelerator.self_correction import SelfCorrectingConverter
+from altryx_accelerator.validators import run_generated_code, strip_databricks_magics
 
 SAMPLES_DIR = Path(__file__).parent / "sample_workflows"
 
-
-@pytest.fixture(scope="module")
-def spark():
-    from pyspark.sql import SparkSession
-
-    session = (
-        SparkSession.builder.master("local[2]")
-        .appName("altryx-e2e-tests")
-        .config("spark.ui.enabled", "false")
-        .config("spark.sql.shuffle.partitions", "2")
-        .getOrCreate()
-    )
-    session.sparkContext.setLogLevel("ERROR")
-    yield session
-    session.stop()
 
 
 def _exec(code, spark):
@@ -103,10 +88,10 @@ def test_formula_union_sort_data_values(spark):
     final = _exec(result.code, spark)["df_7"]
     got = {(r["Product"], r["Q1Sales"], r["Region"], r["Tier"]) for r in final.collect()}
     assert got == {
-        ("Widget", "1000", "East", "Standard"),
-        ("Gadget", "2500", "East", "High"),
-        ("Widget", "800", "West", "Standard"),
-        ("Sprocket", "1900", "West", "High"),
+        ("Widget", 1000, "East", "Standard"),
+        ("Gadget", 2500, "East", "High"),
+        ("Widget", 800, "West", "Standard"),
+        ("Sprocket", 1900, "West", "High"),
     }
 
 
@@ -161,3 +146,13 @@ def test_run_generated_code_reports(spark):
     assert outcome["ok"], outcome["error"]
     assert outcome["dataframes"]["df_4"]["rows"] == 2
     assert outcome["dataframes"]["df_4"]["columns"] == ["OrderID", "CustomerName", "Amount"]
+
+
+def test_dynamic_rename_customer_xml(spark):
+    from tests.test_dynamic_rename import make_code
+    ns = _exec('from pyspark.sql import functions as F\n'
+               'df_left = spark.createDataFrame([(7,)], ["Name"])\n'
+               'df_right = spark.createDataFrame([("Name", "New Name")], ["old", "new"])\n'
+               + make_code('RightInputRows', '<NamesFromRows><OldName>old</OldName><NewName>new</NewName></NamesFromRows>'), spark)
+    assert ns['df_3'].columns == ['New Name']
+    assert ns['df_3'].first()[0] == 7

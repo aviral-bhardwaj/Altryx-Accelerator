@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "altryx-accelerator"
-version = "1.0.0"
+version = "1.1.0"
 description = "Alteryx .yxmd → Databricks PySpark notebook converter with a self-correcting validation loop, packaged as a Databricks Asset Bundle"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,18 +26,21 @@ dependencies = [
 
 [project.optional-dependencies]
 ai = ["anthropic>=0.39.0", "jinja2>=3.0"]
-dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "build>=1.2", "wheel>=0.43", "databricks-sdk>=0.70", "pillow>=10"]
 spark = ["pyspark>=3.4"]
 
 [project.urls]
 Repository = "https://github.com/aviral-bhardwaj/Altryx-Accelerator"
 
 [project.scripts]
-altryx-convert = "convert:main"
+altryx-convert = "altryx_accelerator.cli:main"
 
 [tool.setuptools]
-packages = ["src", "src.tools"]
+packages = ["altryx_accelerator", "altryx_accelerator.tools", "altryx_accelerator.config"]
 py-modules = ["convert"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+altryx_accelerator = ["config/*.yaml", "config/*.json"]

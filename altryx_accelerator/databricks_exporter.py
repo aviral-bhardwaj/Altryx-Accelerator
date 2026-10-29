@@ -15,6 +15,7 @@ runs the full self-correcting pipeline per workflow, producing a mirrored
 Databricks folder structure of converted notebooks plus a batch summary.
 """
 
+import hashlib
 import io
 import json
 import logging
@@ -108,6 +109,8 @@ def to_ipynb(code: str, report_markdown: Optional[str] = None) -> dict:
                 nb.cells.append(nbformat.v4.new_markdown_cell(source))
             else:
                 nb.cells.append(nbformat.v4.new_code_cell(source))
+        for i, cell in enumerate(nb.cells):
+            cell.id = hashlib.sha256(f"{i}:{cell.source}".encode()).hexdigest()[:12]
         return json.loads(nbformat.writes(nb))
     except ImportError:
         logger.warning("nbformat not installed; using built-in .ipynb writer")

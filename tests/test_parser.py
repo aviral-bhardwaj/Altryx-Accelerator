@@ -7,7 +7,7 @@ import tempfile
 import pytest
 import xml.etree.ElementTree as ET
 
-from src.parser import (
+from altryx_accelerator.parser import (
     AlteryxWorkflowParser,
     _extract_tool_type,
     _get_text,
@@ -16,7 +16,7 @@ from src.parser import (
     _extract_structured_config,
     PLUGIN_TYPE_MAP,
 )
-from src.models import Workflow, Container, Tool, Connection
+from altryx_accelerator.models import Workflow, Container, Tool, Connection
 
 
 # ── Plugin Type Extraction ────────────────────────────────────────

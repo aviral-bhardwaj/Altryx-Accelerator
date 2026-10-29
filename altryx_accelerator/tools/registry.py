@@ -5,7 +5,7 @@ Central registry mapping Alteryx tool types to ``ToolConverter`` classes.
 
 Two extension mechanisms, both requiring zero changes to the core engine:
 
-1. **Python plugin**: subclass ``ToolConverter`` anywhere under ``src/tools/``
+1. **Python plugin**: subclass ``ToolConverter`` anywhere under ``altryx_accelerator/tools/``
    and decorate with ``@register("MyToolType")``.
 2. **YAML mapping** (``config/tool_mapping.yaml``): declare
    ``tools.<ToolType>.converter: dotted.path.ToClass`` to add or override a
@@ -40,7 +40,7 @@ def registered_tool_types() -> list:
 
 
 def resolve_converter_class(dotted_path: str):
-    """Import a converter class from a dotted path like ``src.tools.builtin.FilterConverter``."""
+    """Import a converter class from a dotted path like ``altryx_accelerator.tools.builtin.FilterConverter``."""
     module_path, _, class_name = dotted_path.rpartition(".")
     module = importlib.import_module(module_path)
     return getattr(module, class_name)

@@ -1,0 +1,178 @@
+# ═══════════════════════════════════════════════════════════════════
+# Alteryx tool → PySpark/Databricks conversion mapping
+# ═══════════════════════════════════════════════════════════════════
+# This file drives the converter engine (altryx_accelerator/converter_engine.py).
+#
+# To add or override a tool mapping WITHOUT touching core code:
+#   1. Implement a ToolConverter subclass anywhere importable
+#      (recommended: a new module under altryx_accelerator/tools/).
+#   2. Point `tools.<AlteryxToolType>.converter` at its dotted path.
+#
+# `support` is documentation for the report: full | partial | passthrough.
+# `spark_equivalent` is shown to users in the Skill Mode notebook.
+
+version: 1
+
+defaults:
+  fallback_converter: altryx_accelerator.tools.builtin.PassthroughConverter
+  unsupported_message: >-
+    This Alteryx tool has no registered converter. The data stream is passed
+    through unchanged; add a plugin in altryx_accelerator/tools/ or map it here.
+
+tools:
+  InputData:
+    converter: altryx_accelerator.tools.builtin.InputDataConverter
+    support: full
+    spark_equivalent: spark.table() / spark.read (Delta, CSV, Parquet, Excel)
+  DynamicInput:
+    converter: altryx_accelerator.tools.builtin.InputDataConverter
+    support: partial
+    spark_equivalent: spark.table() / spark.read
+  TextInput:
+    converter: altryx_accelerator.tools.builtin.TextInputConverter
+    support: full
+    spark_equivalent: spark.createDataFrame() with inline rows
+  OutputData:
+    converter: altryx_accelerator.tools.builtin.OutputDataConverter
+    support: full
+    spark_equivalent: df.write.format("delta").saveAsTable() + temp view
+  Filter:
+    converter: altryx_accelerator.tools.builtin.FilterConverter
+    support: full
+    spark_equivalent: df.filter() with True/False output ports
+  Formula:
+    converter: altryx_accelerator.tools.builtin.FormulaConverter
+    support: full
+    spark_equivalent: df.withColumn() + expression parser
+  Select:
+    converter: altryx_accelerator.tools.builtin.SelectConverter
+    support: full
+    spark_equivalent: drop / withColumnRenamed / cast
+  Join:
+    converter: altryx_accelerator.tools.builtin.JoinConverter
+    support: full
+    spark_equivalent: df.join() (inner + left_anti/right_anti for J/L/R ports)
+  Union:
+    converter: altryx_accelerator.tools.builtin.UnionConverter
+    support: full
+    spark_equivalent: unionByName(allowMissingColumns=True)
+  Summarize:
+    converter: altryx_accelerator.tools.builtin.SummarizeConverter
+    support: full
+    spark_equivalent: groupBy().agg()  # First/Last actions are flagged with a TODO (order-dependent in Spark)
+  Sort:
+    converter: altryx_accelerator.tools.builtin.SortConverter
+    support: full
+    spark_equivalent: orderBy()
+  Unique:
+    converter: altryx_accelerator.tools.builtin.UniqueConverter
+    support: full
+    spark_equivalent: dropDuplicates() (+ exceptAll for Dupes port)
+  Sample:
+    converter: altryx_accelerator.tools.builtin.SampleConverter
+    support: full
+    spark_equivalent: limit()
+  CrossTab:
+    converter: altryx_accelerator.tools.builtin.CrossTabConverter
+    support: full
+    spark_equivalent: groupBy().pivot().agg()
+  Transpose:
+    converter: altryx_accelerator.tools.builtin.TransposeConverter
+    support: full
+    spark_equivalent: select(stack(...)) unpivot
+  MultiRowFormula:
+    converter: altryx_accelerator.tools.builtin.MultiRowFormulaConverter
+    support: partial
+    spark_equivalent: Window lag()/lead()
+  RegEx:
+    converter: altryx_accelerator.tools.builtin.RegExConverter
+    support: full
+    spark_equivalent: regexp_extract / regexp_replace / rlike
+  RecordID:
+    converter: altryx_accelerator.tools.builtin.RecordIDConverter
+    support: full
+    spark_equivalent: monotonically_increasing_id()
+  AppendFields:
+    converter: altryx_accelerator.tools.builtin.AppendFieldsConverter
+    support: full
+    spark_equivalent: crossJoin()
+  RunningTotal:
+    converter: altryx_accelerator.tools.builtin.RunningTotalConverter
+    support: partial
+    spark_equivalent: Window running sum
+  TextToColumns:
+    converter: altryx_accelerator.tools.builtin.TextToColumnsConverter
+    support: partial
+    spark_equivalent: F.split() / explode()
+  DateTime:
+    converter: altryx_accelerator.tools.builtin.DateTimeConverter
+    support: partial
+    spark_equivalent: to_date / date_format
+  DynamicRename:
+    converter: altryx_accelerator.tools.builtin.DynamicRenameConverter
+    support: full
+    spark_equivalent: withColumnRenamed loop
+  GenerateRows:
+    converter: altryx_accelerator.tools.builtin.GenerateRowsConverter
+    support: partial
+    spark_equivalent: spark.range()
+  MultiFieldFormula:
+    converter: altryx_accelerator.tools.builtin.MultiFieldFormulaConverter
+    support: partial
+    spark_equivalent: withColumn loop over fields
+  FindReplace:
+    converter: altryx_accelerator.tools.builtin.FindReplaceConverter
+    support: partial
+    spark_equivalent: regexp_replace / join-based lookup
+  Browse:
+    converter: altryx_accelerator.tools.builtin.BrowseConverter
+    support: full
+    spark_equivalent: display() passthrough
+  BrowseV2:
+    converter: altryx_accelerator.tools.builtin.BrowseConverter
+    support: full
+    spark_equivalent: display() passthrough
+  Comment:
+    converter: altryx_accelerator.tools.builtin.PassthroughConverter
+    support: passthrough
+    spark_equivalent: (annotation only)
+  BlockUntilDone:
+    converter: altryx_accelerator.tools.builtin.PassthroughConverter
+    support: passthrough
+    spark_equivalent: (execution ordering handled by cell order)
+  RunCommand:
+    converter: altryx_accelerator.tools.builtin.PassthroughConverter
+    support: passthrough
+    spark_equivalent: (review manually — external command)
+  # LockIn* (In-DB) variants reuse the standard converters
+  LockInStreamIn:
+    converter: altryx_accelerator.tools.builtin.InputDataConverter
+    support: full
+    spark_equivalent: spark.table()
+  LockInStreamOut:
+    converter: altryx_accelerator.tools.builtin.OutputDataConverter
+    support: full
+    spark_equivalent: df.write.format("delta")
+  LockInFilter:
+    converter: altryx_accelerator.tools.builtin.FilterConverter
+    support: full
+    spark_equivalent: df.filter()
+  LockInSelect:
+    converter: altryx_accelerator.tools.builtin.SelectConverter
+    support: full
+    spark_equivalent: drop / rename / cast
+  LockInJoin:
+    converter: altryx_accelerator.tools.builtin.JoinConverter
+    support: full
+    spark_equivalent: df.join()
+  LockInFormula:
+    converter: altryx_accelerator.tools.builtin.FormulaConverter
+    support: full
+    spark_equivalent: df.withColumn()
+
+# Optimization rules applied by the self-correction loop on WARNING.
+optimizations:
+  broadcast_small_joins: true          # F.broadcast() when one side is inline TextInput
+  prefer_delta_writes: true            # rewrite CSV writes to Delta
+  zorder_hint: true                    # append OPTIMIZE ... ZORDER guidance
+  unity_catalog_three_level_names: true

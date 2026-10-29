@@ -1,10 +1,13 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """
 Shared test fixtures for the Alteryx to PySpark converter test suite.
 """
 
 import pytest
 
-from src.models import Workflow, Container, Tool, Connection
+from altryx_accelerator.models import Workflow, Container, Tool, Connection
 
 
 @pytest.fixture
@@ -192,3 +195,25 @@ def sample_workflow(sample_tool_input, sample_tool_filter, sample_tool_formula, 
         text_inputs={},
         metadata={"yxmd_version": "2024.1"},
     )
+
+@pytest.fixture(autouse=True)
+def notebook_sample_location(monkeypatch):
+    monkeypatch.setenv("SKILL_SAMPLES_DIR", str(Path(__file__).parent / "sample_workflows"))
+
+@pytest.fixture(scope="session")
+def spark():
+    pytest.importorskip("pyspark")
+    from pyspark.sql import SparkSession
+
+    import os
+    os.environ["PYSPARK_PYTHON"] = sys.executable
+    session = (
+        SparkSession.builder.master("local[2]")
+        .appName("altryx-e2e-tests")
+        .config("spark.ui.enabled", "false")
+        .config("spark.sql.shuffle.partitions", "2")
+        .getOrCreate()
+    )
+    session.sparkContext.setLogLevel("ERROR")
+    yield session
+    session.stop()
